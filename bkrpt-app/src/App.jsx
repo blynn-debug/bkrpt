@@ -236,6 +236,9 @@ export default function App() {
   const [showSaveModal, setShowSaveModal] = useState(false);
   const filterBookmarkRef = useRef(null);
 
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedItems, setSelectedItems] = useState(new Set());
+
   useEffect(() => {
     const savedEmail = localStorage.getItem('savedEmail');
     const savedPassword = localStorage.getItem('savedPassword');
@@ -473,6 +476,75 @@ export default function App() {
 
   const toggleRegion = (region) => setFilterRegions(prev => prev.includes(region) ? prev.filter(r => r !== region) : [...prev, region]);
   const toggleCategory = (cat) => setFilterCategories(prev => prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]);
+  const downloadPDF = async (uniqueCode) => {
+    try {
+      const { data } = supabase.storage
+        .from('property-pdfs')
+        .getPublicUrl(`${uniqueCode}.pdf`);
+
+      if (data?.publicUrl) {
+        window.open(data.publicUrl, '_blank');
+      } else {
+        alert('PDF 파일을 찾을 수 없습니다.');
+      }
+    } catch (err) {
+      console.error('PDF 다운로드 오류:', err);
+      alert('PDF 파일을 찾을 수 없습니다.');
+    }
+  };
+  const toggleSelectionMode = () => {
+  setIsSelectionMode(prev => !prev);
+  setSelectedItems(new Set());
+};
+
+const toggleSelectItem = (id) => {
+  setSelectedItems(prev => {
+    const newSet = new Set(prev);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+    } else {
+      newSet.add(id);
+    }
+    return newSet;
+  });
+};
+
+const selectAll = () => {
+  const currentData = activeTab === 'dashboard' ? dashboardData : myPageData;
+  setSelectedItems(new Set(currentData.map(item => item.id)));
+};
+
+const deselectAll = () => {
+  setSelectedItems(new Set());
+};
+
+const downloadSelectedPDFs = async () => {
+  if (selectedItems.size === 0) {
+    alert('선택된 매물이 없습니다.');
+    return;
+  }
+
+  const currentData = activeTab === 'dashboard' ? dashboardData : myPageData;
+  const selectedData = currentData.filter(item => selectedItems.has(item.id));
+
+  for (const item of selectedData) {
+    const { data } = supabase.storage
+      .from('property-pdfs')
+      .getPublicUrl(`${item.uniqueCode}.pdf`);
+
+    if (data?.publicUrl) {
+      // 각 PDF를 새 탭으로 열기 (브라우저 정책상 직접 다운로드는 제한됨)
+      window.open(data.publicUrl, '_blank');
+      // 연속 요청 방지를 위한 딜레이
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+  }
+
+
+  setIsSelectionMode(false);
+  setSelectedItems(new Set());
+};
+
 
   const getFilteredData = (sourceData) => {
     let result = sourceData.filter(item => {
@@ -653,7 +725,7 @@ export default function App() {
                   </div>
                   <div className="space-y-3">
                     <button onClick={() => toggleFavorite(selectedItem.id)} className={`w-full py-3 rounded-lg font-bold flex items-center justify-center gap-2 ${isFavorite ? 'bg-yellow-400 text-white hover:bg-yellow-500' : 'bg-gray-200 text-gray-700 hover:bg-yellow-400 hover:text-white'}`}><Star size={18} fill={isFavorite ? "currentColor" : "none"} /> 관심 물건 {isFavorite ? '해제' : '등록'}</button>
-                    <button className="w-full py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-bold flex items-center justify-center gap-2"><Download size={18} /> 원본 공고 다운로드</button>
+                    <button onClick={() => downloadPDF(selectedItem.uniqueCode)} className="w-full py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-bold flex items-center justify-center gap-2"><Download size={18} /> 원본 공고 다운로드</button>
                     <button className="w-full py-3 bg-gray-800 hover:bg-gray-900 text-white rounded-lg font-bold flex items-center justify-center gap-2"><Phone size={18} /> 파산관재인 연락하기</button>
                   </div>
                 </div>
@@ -669,7 +741,18 @@ export default function App() {
     const currentBidInfo = getCurrentBidInfo(item.deadlines);
     const isFavorite = user ? userFavoriteIds.has(item.id) : item.isFavorite;
     return (
-      <div key={item.id} onClick={() => setSelectedItem(item)} className={`group bg-white rounded-2xl overflow-hidden hover:-translate-y-1 transition-all duration-300 flex flex-col h-full shadow-sm border cursor-pointer ${currentBidInfo.status === 'today' ? 'border-red-300 ring-2 ring-red-100' : currentBidInfo.status === 'tomorrow' ? 'border-orange-300 ring-2 ring-orange-100' : 'border-gray-100'}`}>
+      <div key={item.id} onClick={() => isSelectionMode ? toggleSelectItem(item.id) : setSelectedItem(item)} className={`group relative bg-white rounded-2xl overflow-hidden hover:-translate-y-1 transition-all duration-300 flex flex-col h-full shadow-sm border cursor-pointer ${selectedItems.has(item.id) ? 'ring-2 ring-indigo-500 border-indigo-300' : currentBidInfo.status === 'today' ? 'border-red-300 ring-2 ring-red-100' : currentBidInfo.status === 'tomorrow' ? 'border-orange-300 ring-2 ring-orange-100' : 'border-gray-100'}`}>
+  {isSelectionMode && (
+    <div className="absolute top-3 left-3 z-10">
+      <input
+        type="checkbox"
+        checked={selectedItems.has(item.id)}
+        onChange={(e) => { e.stopPropagation(); toggleSelectItem(item.id); }}
+        onClick={(e) => e.stopPropagation()}
+        className="w-5 h-5 text-indigo-600 rounded border-gray-300 cursor-pointer"
+      />
+    </div>
+  )}
         {(currentBidInfo.status === 'today' || currentBidInfo.status === 'tomorrow') && (<div className={`py-1.5 text-center text-xs font-bold ${currentBidInfo.status === 'today' ? 'bg-red-500 text-white' : 'bg-orange-500 text-white'}`}>{currentBidInfo.status === 'today' ? '🔥 오늘 마감!' : '⏰ 내일 마감!'}</div>)}
         <div className="px-5 pt-5 pb-3 flex justify-between items-start">
           <div className="flex flex-wrap gap-1.5">
@@ -694,7 +777,7 @@ export default function App() {
         <div className="px-5 py-4 border-t border-gray-100 flex items-center justify-between bg-white">
           <span className={`px-3 py-1 rounded-full text-xs font-bold ${item.status === '낙찰' ? 'bg-gray-100 text-gray-500' : currentBidInfo.isExpired ? 'bg-amber-50 text-amber-600 ring-1 ring-amber-100' : 'bg-indigo-50 text-indigo-600 ring-1 ring-indigo-100'}`}>{item.status === '낙찰' ? '낙찰' : currentBidInfo.isExpired ? '수의계약' : '진행중'}</span>
           <div className="flex gap-2">
-            <button onClick={(e) => { e.stopPropagation(); alert('준비중인 기능입니다.'); }} className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg" title="공고문 다운로드"><Download size={18} /></button>
+            <button onClick={(e) => { e.stopPropagation(); downloadPDF(item.uniqueCode); }} className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg" title="공고문 다운로드"><Download size={18} /></button>
             <button onClick={(e) => { e.stopPropagation(); setSelectedItem(item); }} className="text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 px-4 py-2 rounded-lg shadow-sm">상세보기</button>
           </div>
         </div>
@@ -723,7 +806,7 @@ export default function App() {
           <div className="flex justify-between h-16 items-center">
             <div className="flex items-center gap-3"><div className="bg-indigo-600 p-2 rounded-lg text-white shadow-md"><Building size={24} /></div><h1 className="text-xl font-bold text-gray-900 tracking-tight">파산자 공매 정보</h1></div>
             <nav className="flex items-center space-x-8">
-              <button onClick={() => setActiveTab('dashboard')} className={`text-[18px] font-bold ${activeTab === 'dashboard' ? 'text-indigo-600' : 'text-gray-800 hover:text-indigo-600'}`}>매물 목록</button>
+              <button onClick={() => setActiveTab('dashboard')} className={`text-[18px] font-bold ${activeTab === 'dashboard' ? 'text-indigo-600' : 'text-gray-800 hover:text-indigo-600'}`}>부동산</button>
               <button onClick={() => setActiveTab('input')} className={`text-[18px] font-bold ${activeTab === 'input' ? 'text-indigo-600' : 'text-gray-800 hover:text-indigo-600'}`}>마이 페이지</button>
               {user ? (<div className="flex items-center gap-3"><span className="text-sm text-gray-600 hidden md:inline">{user.email}</span><button onClick={handleLogout} className="flex items-center gap-1 px-3 py-2 text-sm text-gray-600 hover:text-red-600"><LogOut size={16} /><span className="hidden sm:inline">로그아웃</span></button></div>) : (<button onClick={() => setShowAuthModal(true)} className="flex items-center gap-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"><LogIn size={16} />로그인</button>)}
             </nav>
@@ -736,36 +819,80 @@ export default function App() {
         {!isLoading && (
           <>
             <div className="space-y-8 mb-8">
-              <div className="bg-white border-l-4 border-red-500 p-5 rounded-r-xl shadow-sm flex items-start"><AlertCircle className="text-red-500 mt-0.5 mr-3 flex-shrink-0" size={20} /><div><p className="font-bold text-gray-800">낙찰 여부 등 정확한 세부내용 : 관재인 문의</p><p className="text-sm text-gray-500 mt-1">본 사이트의 정보는 참고용이며, 실제 입찰 전 반드시 담당 관재인에게 문의하시기 바랍니다.</p></div></div>
-              <div className="bg-white p-6 rounded-2xl space-y-5">
-                <div className="flex flex-col xl:flex-row gap-4 justify-between">
-                  <div className="flex flex-wrap gap-3 flex-1 items-center">
-                    <select className="bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-lg p-2.5 outline-none hover:bg-gray-100" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}><option value="all">상태: 전체</option><option value="active">진행중</option><option value="negotiation">🤝 수의계약</option><option value="sold">낙찰</option></select>
-                    <div className="relative min-w-[140px]" ref={categoryDropdownRef}>
-                      <button onClick={() => setIsCategoryDropdownOpen(!isCategoryDropdownOpen)} className="w-full flex items-center justify-between px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-100"><span className={`truncate ${filterCategories.length === 0 ? 'text-gray-700' : 'text-indigo-600 font-medium'}`}>{filterCategories.length === 0 ? "종류: 전체" : `${filterCategories[0]}${filterCategories.length > 1 ? ` 외 ${filterCategories.length - 1}개` : ''}`}</span><ChevronDown size={16} className={`text-gray-400 flex-shrink-0 ${isCategoryDropdownOpen ? 'rotate-180' : ''}`} /></button>
-                      {isCategoryDropdownOpen && (<div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-30 p-2 w-[180px]"><div className="space-y-1">{CATEGORY_LIST.map((cat) => (<label key={cat} className="flex items-center space-x-2 cursor-pointer p-2 rounded hover:bg-indigo-50"><div className={`w-4 h-4 rounded border flex items-center justify-center ${filterCategories.includes(cat) ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300 bg-white'}`}>{filterCategories.includes(cat) && <Check size={12} className="text-white" />}</div><input type="checkbox" className="hidden" checked={filterCategories.includes(cat)} onChange={() => toggleCategory(cat)} /><span className={`text-sm ${filterCategories.includes(cat) ? 'text-indigo-700 font-bold' : 'text-gray-600'}`}>{cat}</span></label>))}</div>{filterCategories.length > 0 && (<div className="border-t border-gray-100 mt-2 pt-2"><button onClick={() => setFilterCategories([])} className="w-full text-xs text-center text-red-500 hover:text-red-700 py-1">초기화</button></div>)}</div>)}
-                    </div>
-                    <select className="w-[200px] bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-lg p-2.5 outline-none hover:bg-gray-100" value={filterPriceIndex} onChange={(e) => setFilterPriceIndex(Number(e.target.value))}>{PRICE_RANGES.map((range, index) => (<option key={index} value={index}>{range.label}</option>))}</select>
-                    <div className="relative w-[200px]" ref={regionDropdownRef}>
-                      <button onClick={() => setIsRegionDropdownOpen(!isRegionDropdownOpen)} className="w-full flex items-center justify-between px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-100"><div className="flex items-center gap-2 truncate"><MapPin size={16} className="text-gray-400 flex-shrink-0" /><span className={`truncate ${filterRegions.length === 0 ? 'text-gray-400' : 'text-indigo-600 font-medium'}`}>{filterRegions.length === 0 ? "지역 선택 (전체)" : `${filterRegions[0]}${filterRegions.length > 1 ? ` 외 ${filterRegions.length - 1}곳` : ''}`}</span></div><ChevronDown size={16} className={`text-gray-400 flex-shrink-0 ${isRegionDropdownOpen ? 'rotate-180' : ''}`} /></button>
-                      {isRegionDropdownOpen && (<div className="absolute top-full left-0 right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-30 p-3 w-[300px]"><div className="flex justify-between items-center mb-2 px-1"><span className="text-xs font-bold text-gray-500">지역 중복 선택 가능</span>{filterRegions.length > 0 && (<button onClick={() => setFilterRegions([])} className="text-xs text-red-500 hover:text-red-700 flex items-center"><X size={12} className="mr-1"/> 초기화</button>)}</div><div className="grid grid-cols-3 gap-2 max-h-[200px] overflow-y-auto">{REGION_LIST.map((region) => (<label key={region} className="flex items-center space-x-2 cursor-pointer p-2 rounded hover:bg-indigo-50"><div className={`w-4 h-4 rounded border flex items-center justify-center ${filterRegions.includes(region) ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300 bg-white'}`}>{filterRegions.includes(region) && <Check size={12} className="text-white" />}</div><input type="checkbox" className="hidden" checked={filterRegions.includes(region)} onChange={() => toggleRegion(region)} /><span className={`text-sm ${filterRegions.includes(region) ? 'text-indigo-700 font-bold' : 'text-gray-600'}`}>{region}</span></label>))}</div></div>)}
-                    </div>
-                    <div className="flex flex-1 gap-2 min-w-[320px] w-1/4">
-                      <div className="relative flex-grow"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><User size={16} className="text-gray-400" /></div><input type="text" placeholder="관재인 또는 채무자 이름 검색" className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filterPerson} onChange={(e) => setFilterPerson(e.target.value)} /></div>
-                      <button className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium shadow-sm flex items-center whitespace-nowrap"><Search size={16} className="mr-2" /> 검색</button>
-                      <button onClick={resetFilters} className="bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-2.5 rounded-lg text-sm font-medium flex items-center whitespace-nowrap gap-1" title="필터 초기화"><RotateCcw size={16} /><span className="hidden xl:inline">초기화</span></button>
-                      <div className="relative" ref={filterBookmarkRef}>
-                        <button onClick={() => setIsFilterBookmarkOpen(!isFilterBookmarkOpen)} className="bg-amber-500 hover:bg-amber-600 text-white px-3 py-2.5 rounded-lg text-sm font-medium shadow-sm flex items-center whitespace-nowrap gap-1" title="즐겨찾기 검색 조건"><Bookmark size={16} /><span className="hidden xl:inline">즐겨찾기</span>{savedFilters.length > 0 && (<span className="bg-white text-amber-600 text-xs font-bold px-1.5 py-0.5 rounded-full ml-1">{savedFilters.length}</span>)}</button>
-                        {isFilterBookmarkOpen && (<div className="absolute top-full right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-xl z-30 w-[360px]"><div className="p-4 border-b border-gray-100"><div className="flex items-center justify-between mb-3"><h3 className="font-bold text-gray-800 flex items-center gap-2"><Bookmark size={18} className="text-amber-500" />즐겨찾기 검색 조건</h3><span className="text-xs text-gray-400">{savedFilters.length}/50</span></div><button onClick={saveCurrentFilter} className="w-full py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-lg text-sm font-medium flex items-center justify-center gap-2 border border-amber-200"><BookmarkPlus size={16} />현재 검색 조건 저장</button></div><div className="max-h-[300px] overflow-y-auto">{savedFilters.length === 0 ? (<div className="p-6 text-center text-gray-400"><Bookmark size={32} className="mx-auto mb-2 opacity-30" /><p className="text-sm">저장된 검색 조건이 없습니다.</p></div>) : (<div className="p-2 space-y-1">{savedFilters.map((saved) => (<div key={saved.id} className="group flex items-center gap-2 p-3 hover:bg-gray-50 rounded-lg cursor-pointer"><div className="flex-1 min-w-0" onClick={() => applySavedFilter(saved)}><p className="font-medium text-gray-800 text-sm truncate">{saved.name}</p><p className="text-xs text-gray-400 truncate">{getFilterSummary(saved.filters)}</p></div><button onClick={(e) => { e.stopPropagation(); deleteSavedFilter(saved.id); }} className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100" title="삭제"><Trash2 size={14} /></button></div>))}</div>)}</div></div>)}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2"><ArrowUpDown size={16} className="text-gray-400"/><select className="bg-white border border-gray-200 text-gray-900 text-sm rounded-lg p-2.5 font-medium min-w-[140px]" value={sortOption} onChange={(e) => setSortOption(e.target.value)}><option value="default">기본 정렬</option><option value="priceAsc">최저가순</option><option value="dateAsc">매각 기일 순</option></select></div>
-                  <div className="h-10 w-px bg-gray-200 mx-1 hidden sm:block"></div>
-                  <div className="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200"><span className="text-xs font-semibold text-gray-500 uppercase">보기</span><select className="bg-transparent text-sm font-medium text-gray-900 focus:outline-none" value={itemsPerPage} onChange={(e) => setItemsPerPage(Number(e.target.value))}><option value={10}>10개</option><option value={20}>20개</option><option value={50}>50개</option><option value={100}>100개</option></select></div>
-                </div>
+  <div className="bg-white border-l-4 border-red-500 p-5 rounded-r-xl shadow-sm flex items-start"><AlertCircle className="text-red-500 mt-0.5 mr-3 flex-shrink-0" size={20} /><div><p className="font-bold text-gray-800">낙찰 여부 등 정확한 세부내용 : 관재인 문의</p><p className="text-sm text-gray-500 mt-1">본 사이트의 정보는 참고용이며, 실제 입찰 전 반드시 담당 관재인에게 문의하시기 바랍니다.</p></div></div>
+  <div className="bg-white p-6 rounded-2xl">
+  {/* 1행: 필터 + 검색 + 초기화 + 즐겨찾기 + 정렬 + 보기 */}
+  <div className="flex flex-wrap gap-3 items-center justify-between">
+    <div className="flex flex-wrap gap-3 items-center">
+      <select className="bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-lg p-2.5 outline-none hover:bg-gray-100" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}><option value="all">상태: 전체</option><option value="active">진행중</option><option value="negotiation">🤝 수의계약</option><option value="sold">낙찰</option></select>
+      <div className="relative min-w-[140px]" ref={categoryDropdownRef}>
+        <button onClick={() => setIsCategoryDropdownOpen(!isCategoryDropdownOpen)} className="w-full flex items-center justify-between px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-100"><span className={`truncate ${filterCategories.length === 0 ? 'text-gray-700' : 'text-indigo-600 font-medium'}`}>{filterCategories.length === 0 ? "종류: 전체" : `${filterCategories[0]}${filterCategories.length > 1 ? ` 외 ${filterCategories.length - 1}개` : ''}`}</span><ChevronDown size={16} className={`text-gray-400 flex-shrink-0 ${isCategoryDropdownOpen ? 'rotate-180' : ''}`} /></button>
+        {isCategoryDropdownOpen && (<div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-30 p-2 w-[180px]"><div className="space-y-1">{CATEGORY_LIST.map((cat) => (<label key={cat} className="flex items-center space-x-2 cursor-pointer p-2 rounded hover:bg-indigo-50"><div className={`w-4 h-4 rounded border flex items-center justify-center ${filterCategories.includes(cat) ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300 bg-white'}`}>{filterCategories.includes(cat) && <Check size={12} className="text-white" />}</div><input type="checkbox" className="hidden" checked={filterCategories.includes(cat)} onChange={() => toggleCategory(cat)} /><span className={`text-sm ${filterCategories.includes(cat) ? 'text-indigo-700 font-bold' : 'text-gray-600'}`}>{cat}</span></label>))}</div>{filterCategories.length > 0 && (<div className="border-t border-gray-100 mt-2 pt-2"><button onClick={() => setFilterCategories([])} className="w-full text-xs text-center text-red-500 hover:text-red-700 py-1">초기화</button></div>)}</div>)}
+      </div>
+      <select className="w-[180px] bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-lg p-2.5 outline-none hover:bg-gray-100" value={filterPriceIndex} onChange={(e) => setFilterPriceIndex(Number(e.target.value))}>{PRICE_RANGES.map((range, index) => (<option key={index} value={index}>{range.label}</option>))}</select>
+      <div className="relative w-[180px]" ref={regionDropdownRef}>
+        <button onClick={() => setIsRegionDropdownOpen(!isRegionDropdownOpen)} className="w-full flex items-center justify-between px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-100"><div className="flex items-center gap-2 truncate"><MapPin size={16} className="text-gray-400 flex-shrink-0" /><span className={`truncate ${filterRegions.length === 0 ? 'text-gray-400' : 'text-indigo-600 font-medium'}`}>{filterRegions.length === 0 ? "지역 선택 (전체)" : `${filterRegions[0]}${filterRegions.length > 1 ? ` 외 ${filterRegions.length - 1}곳` : ''}`}</span></div><ChevronDown size={16} className={`text-gray-400 flex-shrink-0 ${isRegionDropdownOpen ? 'rotate-180' : ''}`} /></button>
+        {isRegionDropdownOpen && (<div className="absolute top-full left-0 right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-30 p-3 w-[300px]"><div className="flex justify-between items-center mb-2 px-1"><span className="text-xs font-bold text-gray-500">지역 중복 선택 가능</span>{filterRegions.length > 0 && (<button onClick={() => setFilterRegions([])} className="text-xs text-red-500 hover:text-red-700 flex items-center"><X size={12} className="mr-1"/> 초기화</button>)}</div><div className="grid grid-cols-3 gap-2 max-h-[200px] overflow-y-auto">{REGION_LIST.map((region) => (<label key={region} className="flex items-center space-x-2 cursor-pointer p-2 rounded hover:bg-indigo-50"><div className={`w-4 h-4 rounded border flex items-center justify-center ${filterRegions.includes(region) ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300 bg-white'}`}>{filterRegions.includes(region) && <Check size={12} className="text-white" />}</div><input type="checkbox" className="hidden" checked={filterRegions.includes(region)} onChange={() => toggleRegion(region)} /><span className={`text-sm ${filterRegions.includes(region) ? 'text-indigo-700 font-bold' : 'text-gray-600'}`}>{region}</span></label>))}</div></div>)}
+      </div>
+      <div className="h-8 w-px bg-gray-200 hidden lg:block"></div>
+      <div className="relative w-[200px]">
+        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><User size={16} className="text-gray-400" /></div>
+        <input type="text" placeholder="관재인/채무자 검색" className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filterPerson} onChange={(e) => setFilterPerson(e.target.value)} />
+      </div>
+      <button className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium shadow-sm flex items-center whitespace-nowrap"><Search size={16} className="mr-2" /> 검색</button>
+      <button onClick={resetFilters} className="bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-2.5 rounded-lg text-sm font-medium flex items-center whitespace-nowrap gap-1" title="필터 초기화"><RotateCcw size={16} /><span className="hidden xl:inline">초기화</span></button>
+      <div className="relative" ref={filterBookmarkRef}>
+        <button onClick={() => setIsFilterBookmarkOpen(!isFilterBookmarkOpen)} className="bg-amber-500 hover:bg-amber-600 text-white px-3 py-2.5 rounded-lg text-sm font-medium shadow-sm flex items-center whitespace-nowrap gap-1" title="즐겨찾기 검색 조건"><Bookmark size={16} /><span className="hidden xl:inline">즐겨찾기</span>{savedFilters.length > 0 && (<span className="bg-white text-amber-600 text-xs font-bold px-1.5 py-0.5 rounded-full ml-1">{savedFilters.length}</span>)}</button>
+        {isFilterBookmarkOpen && (<div className="absolute top-full right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-xl z-30 w-[360px]"><div className="p-4 border-b border-gray-100"><div className="flex items-center justify-between mb-3"><h3 className="font-bold text-gray-800 flex items-center gap-2"><Bookmark size={18} className="text-amber-500" />즐겨찾기 검색 조건</h3><span className="text-xs text-gray-400">{savedFilters.length}/50</span></div><button onClick={saveCurrentFilter} className="w-full py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-lg text-sm font-medium flex items-center justify-center gap-2 border border-amber-200"><BookmarkPlus size={16} />현재 검색 조건 저장</button></div><div className="max-h-[300px] overflow-y-auto">{savedFilters.length === 0 ? (<div className="p-6 text-center text-gray-400"><Bookmark size={32} className="mx-auto mb-2 opacity-30" /><p className="text-sm">저장된 검색 조건이 없습니다.</p></div>) : (<div className="p-2 space-y-1">{savedFilters.map((saved) => (<div key={saved.id} className="group flex items-center gap-2 p-3 hover:bg-gray-50 rounded-lg cursor-pointer"><div className="flex-1 min-w-0" onClick={() => applySavedFilter(saved)}><p className="font-medium text-gray-800 text-sm truncate">{saved.name}</p><p className="text-xs text-gray-400 truncate">{getFilterSummary(saved.filters)}</p></div><button onClick={(e) => { e.stopPropagation(); deleteSavedFilter(saved.id); }} className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100" title="삭제"><Trash2 size={14} /></button></div>))}</div>)}</div></div>)}
+      </div>
+    </div>
+    <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2"><ArrowUpDown size={16} className="text-gray-400"/><select className="bg-white border border-gray-200 text-gray-900 text-sm rounded-lg p-2.5 font-medium min-w-[120px]" value={sortOption} onChange={(e) => setSortOption(e.target.value)}><option value="default">기본 정렬</option><option value="priceAsc">최저가순</option><option value="dateAsc">매각 기일 순</option></select></div>
+      <div className="h-10 w-px bg-gray-200 hidden sm:block"></div>
+      <div className="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200"><span className="text-xs font-semibold text-gray-500 uppercase">보기</span><select className="bg-transparent text-sm font-medium text-gray-900 focus:outline-none" value={itemsPerPage} onChange={(e) => setItemsPerPage(Number(e.target.value))}><option value={10}>10개</option><option value={20}>20개</option><option value={50}>50개</option><option value={100}>100개</option></select></div>
+        </div>
+      </div>
+    </div>
+    {/* PDF 선택 버튼 - 독립 영역 */}
+    <div className="flex justify-end">
+      <button onClick={toggleSelectionMode} className={`px-3 py-2.5 rounded-lg text-base font-medium flex items-center whitespace-nowrap gap-1 ${isSelectionMode ? 'bg-indigo-600 text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-600'}`} title="PDF 일괄 다운로드"><Download size={16} /><span>{isSelectionMode ? '선택 취소' : 'PDF 선택'}</span></button>
+    </div>
+  </div>
+            {isSelectionMode && (
+            <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-6 flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selectedItems.size === (activeTab === 'dashboard' ? dashboardData : myPageData).length && selectedItems.size > 0}
+                    onChange={(e) => e.target.checked ? selectAll() : deselectAll()}
+                    className="w-5 h-5 text-indigo-600 rounded border-gray-300"
+                  />
+                  <span className="font-medium text-gray-700">모두 선택</span>
+                </label>
+                <span className="text-sm text-indigo-600 font-bold">
+                  {selectedItems.size}개 선택됨
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={deselectAll}
+                  className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 font-medium"
+                >
+                  선택 해제
+                </button>
+                <button
+                  onClick={downloadSelectedPDFs}
+                  disabled={selectedItems.size === 0}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 text-white rounded-lg text-sm font-bold flex items-center gap-2"
+                >
+                  <Download size={16} />
+                  선택 PDF 다운로드 ({selectedItems.size})
+                </button>
               </div>
             </div>
+          )}
+
             {activeTab === 'dashboard' && (<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">{dashboardData.length === 0 ? (<div className="text-center py-20 col-span-full"><div className="bg-white rounded-2xl p-10 shadow-sm border border-gray-100 inline-block"><p className="text-gray-500 text-lg">검색 조건에 맞는 매물이 없습니다.</p></div></div>) : (dashboardData.map((item) => renderPropertyCard(item)))}</div>)}
             {activeTab === 'input' && (<div><div className="mb-6 flex items-center gap-2"><Star className="text-yellow-400 fill-yellow-400" size={24} /><h2 className="text-xl font-bold text-gray-900">관심 물건 목록</h2><span className="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded-full font-bold ml-1">{myPageData.length}</span></div><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">{myPageData.length === 0 ? (<div className="text-center py-20 col-span-full"><div className="bg-white rounded-2xl p-10 shadow-sm border border-gray-100 inline-block"><Star className="w-12 h-12 text-gray-300 mx-auto mb-3" /><p className="text-gray-500 text-lg">등록된 관심 매물이 없습니다.</p><p className="text-gray-400 text-sm mt-1">매물 목록에서 별표(★)를 눌러 관심 매물을 등록해보세요.</p></div></div>) : (myPageData.map((item) => renderPropertyCard(item)))}</div></div>)}
           </>
