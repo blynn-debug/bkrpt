@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import JSZip from 'jszip';
 import { Search, MapPin, User, AlertCircle, Plus, Building, Download, Star, ArrowUpDown, ChevronDown, Check, X, Filter, Clock, Phone, TrendingDown, Bookmark, BookmarkPlus, Trash2, LogIn, LogOut, Loader2, RotateCcw, Mail, FileText } from 'lucide-react';
 
 // =====================================================
@@ -238,6 +239,7 @@ export default function App() {
 
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedItems, setSelectedItems] = useState(new Set());
+  const [showContactModal, setShowContactModal] = useState(false);
 
   useEffect(() => {
     const savedEmail = localStorage.getItem('savedEmail');
@@ -457,11 +459,10 @@ export default function App() {
   const resetFilters = () => { setFilterStatus('all'); setFilterCategories([]); setFilterPriceIndex(0); setFilterRegions([]); setFilterPerson(''); setSortOption('default'); setFilterShare('all'); };
 
   const toggleFavorite = async (id) => {
-    if (!user) {
-      setData(prevData => prevData.map(item => item.id === id ? { ...item, isFavorite: !item.isFavorite } : item));
-      if (selectedItem && selectedItem.id === id) setSelectedItem(prev => ({ ...prev, isFavorite: !prev.isFavorite }));
-      return;
-    }
+      if (!user) {
+        setShowAuthModal(true);
+        return;
+      }
     const isFavorite = userFavoriteIds.has(id);
     try {
       if (isFavorite) {
@@ -477,21 +478,31 @@ export default function App() {
   const toggleRegion = (region) => setFilterRegions(prev => prev.includes(region) ? prev.filter(r => r !== region) : [...prev, region]);
   const toggleCategory = (cat) => setFilterCategories(prev => prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]);
   const downloadPDF = async (uniqueCode) => {
-    try {
-      const { data } = supabase.storage
-        .from('property-pdfs')
-        .getPublicUrl(`${uniqueCode}.pdf`);
+      try {
+        const { data } = supabase.storage
+          .from('property-pdfs')
+          .getPublicUrl(`${uniqueCode}.pdf`);
 
-      if (data?.publicUrl) {
-        window.open(data.publicUrl, '_blank');
-      } else {
+        if (data?.publicUrl) {
+          // fetch로 파일을 가져와서 직접 다운로드
+          const response = await fetch(data.publicUrl);
+          const blob = await response.blob();
+          const url = window.URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `${uniqueCode}.pdf`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          window.URL.revokeObjectURL(url);
+        } else {
+          alert('PDF 파일을 찾을 수 없습니다.');
+        }
+      } catch (err) {
+        console.error('PDF 다운로드 오류:', err);
         alert('PDF 파일을 찾을 수 없습니다.');
       }
-    } catch (err) {
-      console.error('PDF 다운로드 오류:', err);
-      alert('PDF 파일을 찾을 수 없습니다.');
-    }
-  };
+    };
   const toggleSelectionMode = () => {
   setIsSelectionMode(prev => !prev);
   setSelectedItems(new Set());
@@ -527,19 +538,67 @@ const downloadSelectedPDFs = async () => {
   const currentData = activeTab === 'dashboard' ? dashboardData : myPageData;
   const selectedData = currentData.filter(item => selectedItems.has(item.id));
 
-  for (const item of selectedData) {
-    const { data } = supabase.storage
-      .from('property-pdfs')
-      .getPublicUrl(`${item.uniqueCode}.pdf`);
-
-    if (data?.publicUrl) {
-      // 각 PDF를 새 탭으로 열기 (브라우저 정책상 직접 다운로드는 제한됨)
-      window.open(data.publicUrl, '_blank');
-      // 연속 요청 방지를 위한 딜레이
-      await new Promise(resolve => setTimeout(resolve, 300));
-    }
+  // 1개일 경우 직접 다운로드
+  if (selectedData.length === 1) {
+    await downloadPDF(selectedData[0].uniqueCode);
+    setIsSelectionMode(false);
+    setSelectedItems(new Set());
+    return;
   }
 
+  // 2개 이상일 경우 ZIP으로 묶어서 다운로드
+  try {
+    const zip = new JSZip();
+    let successCount = 0;
+
+    for (const item of selectedData) {
+      const { data } = supabase.storage
+        .from('property-pdfs')
+        .getPublicUrl(`${item.uniqueCode}.pdf`);
+
+      if (data?.publicUrl) {
+        try {
+          const response = await fetch(data.publicUrl);
+          if (response.ok) {
+            const blob = await response.blob();
+            zip.file(`${item.uniqueCode}.pdf`, blob);
+            successCount++;
+          }
+        } catch (fetchErr) {
+          console.error(`PDF 다운로드 실패: ${item.uniqueCode}`, fetchErr);
+        }
+      }
+    }
+
+    if (successCount === 0) {
+      alert('다운로드할 PDF 파일이 없습니다.');
+      return;
+    }
+
+    // ZIP 파일 생성 및 다운로드
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+
+    // localStorage에서 날짜별 카운터 관리
+    const storageKey = `pdfDownloadCount_${dateStr}`;
+    let downloadCount = parseInt(localStorage.getItem(storageKey) || '0', 10) + 1;
+    localStorage.setItem(storageKey, downloadCount.toString());
+
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    const url = window.URL.createObjectURL(zipBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `파산자 공매_${dateStr}_${downloadCount}.zip`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+
+    // alert(`${successCount}개의 PDF가 ZIP 파일로 다운로드되었습니다.`);
+  } catch (err) {
+    console.error('ZIP 다운로드 오류:', err);
+    alert('다운로드 중 오류가 발생했습니다.');
+  }
 
   setIsSelectionMode(false);
   setSelectedItems(new Set());
@@ -605,6 +664,68 @@ const downloadSelectedPDFs = async () => {
       </div>
     );
   };
+
+  const renderContactModal = () => {
+      if (!showContactModal || !selectedItem) return null;
+
+      const scriptText = `안녕하세요, ${selectedItem.debtorName}님 물건 낙찰 여부 문의드립니다.`;
+
+      const copyToClipboard = (text) => {
+        navigator.clipboard.writeText(text);
+        alert('클립보드에 복사되었습니다.');
+      };
+
+      return (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setShowContactModal(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-[420px] overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-gray-800 text-white p-4 flex items-center justify-between">
+              <h3 className="text-lg font-bold flex items-center gap-2">
+                <Phone size={20} />
+                파산관재인 연락하기
+              </h3>
+              <button onClick={() => setShowContactModal(false)} className="p-1 hover:bg-gray-700 rounded">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5">
+              {/* 관재인 정보 */}
+              <div className="bg-gray-50 rounded-lg p-4 space-y-3">
+                <h4 className="font-bold text-gray-800 text-sm border-b border-gray-200 pb-2">📋 관재인 정보</h4>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">관재인</span>
+                    <span className="font-medium text-gray-800">{selectedItem.trusteeName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">연락처</span>
+                    <a href={`tel:${selectedItem.contact}`} className="font-bold text-indigo-600 hover:underline">
+                      {selectedItem.contact}
+                    </a>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">채무자</span>
+                    <span className="font-medium text-gray-800">{selectedItem.debtorName}</span>
+                  </div>
+
+                </div>
+              </div>
+
+              {/* 전화 멘트 추천 */}
+              <div className="bg-indigo-50 rounded-lg p-4">
+                <h4 className="font-bold text-indigo-800 text-sm mb-3 flex items-center gap-2">
+                  💬 전화 멘트 추천
+                </h4>
+                <p className="text-indigo-900 font-medium text-sm leading-relaxed bg-white p-3 rounded-lg border border-indigo-200">
+                  "{scriptText}"
+                </p>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      );
+    };
 
   const renderDetailModal = () => {
     if (!selectedItem) return null;
@@ -726,7 +847,7 @@ const downloadSelectedPDFs = async () => {
                   <div className="space-y-3">
                     <button onClick={() => toggleFavorite(selectedItem.id)} className={`w-full py-3 rounded-lg font-bold flex items-center justify-center gap-2 ${isFavorite ? 'bg-yellow-400 text-white hover:bg-yellow-500' : 'bg-gray-200 text-gray-700 hover:bg-yellow-400 hover:text-white'}`}><Star size={18} fill={isFavorite ? "currentColor" : "none"} /> 관심 물건 {isFavorite ? '해제' : '등록'}</button>
                     <button onClick={() => downloadPDF(selectedItem.uniqueCode)} className="w-full py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-bold flex items-center justify-center gap-2"><Download size={18} /> 원본 공고 다운로드</button>
-                    <button className="w-full py-3 bg-gray-800 hover:bg-gray-900 text-white rounded-lg font-bold flex items-center justify-center gap-2"><Phone size={18} /> 파산관재인 연락하기</button>
+                    <button onClick={() => setShowContactModal(true)} className="w-full py-3 bg-gray-800 hover:bg-gray-900 text-white rounded-lg font-bold flex items-center justify-center gap-2"><Phone size={18} /> 파산관재인 연락하기</button>
                   </div>
                 </div>
               </div>
@@ -789,6 +910,41 @@ const downloadSelectedPDFs = async () => {
     <div className="min-h-screen text-gray-800 font-sans bg-gray-50">
       {renderDetailModal()}
       {renderAuthModal()}
+      {renderContactModal()}
+
+        {/* 플로팅 버튼 - 권리분석 상담 & 유튜브 */}
+        <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-3">
+
+        <a href="https://pf.kakao.com/_wxoeVK"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group relative flex items-center justify-center w-14 h-14 bg-[#FEE500] hover:bg-[#F7DF00] rounded-full shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-110"
+            title="권리분석 상담"
+          >
+            <svg className="w-8 h-8" viewBox="0 0 24 24" fill="#3C1E1E">
+              <path d="M12 3C6.48 3 2 6.58 2 11c0 2.84 1.86 5.32 4.64 6.7-.15.54-.81 2.93-.84 3.13 0 0-.02.13.05.19.08.06.17.03.17.03.22-.03 2.6-1.72 3.68-2.43.75.11 1.52.17 2.3.17 5.52 0 10-3.58 10-8s-4.48-8-10-8z"/>
+            </svg>
+            <span className="absolute right-16 bg-gray-900 text-white text-sm px-3 py-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap shadow-md">
+              권리분석 상담
+            </span>
+          </a>
+
+            <a href="https://www.youtube.com/@GongMaeTV"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group relative flex items-center justify-center w-14 h-14 bg-[#FF0000] hover:bg-[#CC0000] rounded-full shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-110"
+            title="공매아재TV 유튜브"
+          >
+            <svg className="w-8 h-8 text-white" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+            </svg>
+            <span className="absolute right-16 bg-gray-900 text-white text-sm px-3 py-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap shadow-md">
+              공매아재TV 유튜브
+            </span>
+          </a>
+        </div>
+
+
       {showSaveModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setShowSaveModal(false)}>
           <div className="bg-white rounded-xl shadow-2xl w-[400px] overflow-hidden" onClick={(e) => e.stopPropagation()}>
@@ -822,8 +978,8 @@ const downloadSelectedPDFs = async () => {
   <div className="bg-white border-l-4 border-red-500 p-5 rounded-r-xl shadow-sm flex items-start"><AlertCircle className="text-red-500 mt-0.5 mr-3 flex-shrink-0" size={20} /><div><p className="font-bold text-gray-800">낙찰 여부 등 정확한 세부내용 : 관재인 문의</p><p className="text-sm text-gray-500 mt-1">본 사이트의 정보는 참고용이며, 실제 입찰 전 반드시 담당 관재인에게 문의하시기 바랍니다.</p></div></div>
   <div className="bg-white p-6 rounded-2xl">
   {/* 1행: 필터 + 검색 + 초기화 + 즐겨찾기 + 정렬 + 보기 */}
-  <div className="flex flex-wrap gap-3 items-center justify-between">
-    <div className="flex flex-wrap gap-3 items-center">
+  <div className="flex gap-3 items-center justify-between">
+    <div className="flex gap-3 items-center flex-shrink-0">
       <select className="bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-lg p-2.5 outline-none hover:bg-gray-100" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}><option value="all">상태: 전체</option><option value="active">진행중</option><option value="negotiation">🤝 수의계약</option><option value="sold">낙찰</option></select>
       <div className="relative min-w-[140px]" ref={categoryDropdownRef}>
         <button onClick={() => setIsCategoryDropdownOpen(!isCategoryDropdownOpen)} className="w-full flex items-center justify-between px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-100"><span className={`truncate ${filterCategories.length === 0 ? 'text-gray-700' : 'text-indigo-600 font-medium'}`}>{filterCategories.length === 0 ? "종류: 전체" : `${filterCategories[0]}${filterCategories.length > 1 ? ` 외 ${filterCategories.length - 1}개` : ''}`}</span><ChevronDown size={16} className={`text-gray-400 flex-shrink-0 ${isCategoryDropdownOpen ? 'rotate-180' : ''}`} /></button>
@@ -846,7 +1002,7 @@ const downloadSelectedPDFs = async () => {
         {isFilterBookmarkOpen && (<div className="absolute top-full right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-xl z-30 w-[360px]"><div className="p-4 border-b border-gray-100"><div className="flex items-center justify-between mb-3"><h3 className="font-bold text-gray-800 flex items-center gap-2"><Bookmark size={18} className="text-amber-500" />즐겨찾기 검색 조건</h3><span className="text-xs text-gray-400">{savedFilters.length}/50</span></div><button onClick={saveCurrentFilter} className="w-full py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-lg text-sm font-medium flex items-center justify-center gap-2 border border-amber-200"><BookmarkPlus size={16} />현재 검색 조건 저장</button></div><div className="max-h-[300px] overflow-y-auto">{savedFilters.length === 0 ? (<div className="p-6 text-center text-gray-400"><Bookmark size={32} className="mx-auto mb-2 opacity-30" /><p className="text-sm">저장된 검색 조건이 없습니다.</p></div>) : (<div className="p-2 space-y-1">{savedFilters.map((saved) => (<div key={saved.id} className="group flex items-center gap-2 p-3 hover:bg-gray-50 rounded-lg cursor-pointer"><div className="flex-1 min-w-0" onClick={() => applySavedFilter(saved)}><p className="font-medium text-gray-800 text-sm truncate">{saved.name}</p><p className="text-xs text-gray-400 truncate">{getFilterSummary(saved.filters)}</p></div><button onClick={(e) => { e.stopPropagation(); deleteSavedFilter(saved.id); }} className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100" title="삭제"><Trash2 size={14} /></button></div>))}</div>)}</div></div>)}
       </div>
     </div>
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-3 flex-shrink-0">
       <div className="flex items-center gap-2"><ArrowUpDown size={16} className="text-gray-400"/><select className="bg-white border border-gray-200 text-gray-900 text-sm rounded-lg p-2.5 font-medium min-w-[120px]" value={sortOption} onChange={(e) => setSortOption(e.target.value)}><option value="default">기본 정렬</option><option value="priceAsc">최저가순</option><option value="dateAsc">매각 기일 순</option></select></div>
       <div className="h-10 w-px bg-gray-200 hidden sm:block"></div>
       <div className="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200"><span className="text-xs font-semibold text-gray-500 uppercase">보기</span><select className="bg-transparent text-sm font-medium text-gray-900 focus:outline-none" value={itemsPerPage} onChange={(e) => setItemsPerPage(Number(e.target.value))}><option value={10}>10개</option><option value={20}>20개</option><option value={50}>50개</option><option value={100}>100개</option></select></div>
@@ -855,7 +1011,7 @@ const downloadSelectedPDFs = async () => {
     </div>
     {/* PDF 선택 버튼 - 독립 영역 */}
     <div className="flex justify-end">
-      <button onClick={toggleSelectionMode} className={`px-3 py-2.5 rounded-lg text-base font-medium flex items-center whitespace-nowrap gap-1 ${isSelectionMode ? 'bg-indigo-600 text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-600'}`} title="PDF 일괄 다운로드"><Download size={16} /><span>{isSelectionMode ? '선택 취소' : 'PDF 선택'}</span></button>
+      <button onClick={toggleSelectionMode} className={`px-3 py-2.5 rounded-lg text-base font-medium flex items-center whitespace-nowrap gap-1 ${isSelectionMode ? 'bg-indigo-600 text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-600'}`} title="공고 일괄 다운로드"><Download size={16} /><span>{isSelectionMode ? '선택 취소' : '공고 선택'}</span></button>
     </div>
   </div>
             {isSelectionMode && (
@@ -887,7 +1043,7 @@ const downloadSelectedPDFs = async () => {
                   className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 text-white rounded-lg text-sm font-bold flex items-center gap-2"
                 >
                   <Download size={16} />
-                  선택 PDF 다운로드 ({selectedItems.size})
+                  선택 공고 다운로드 ({selectedItems.size})
                 </button>
               </div>
             </div>
